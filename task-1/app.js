@@ -672,7 +672,8 @@ function formatDate(dateStr) {
 function applyFilters(yearVal, quarterVal, categoryVal, searchVal) {
   const search = searchVal.trim().toLowerCase();
 
-  return EMPLOYEES.map((emp) => {
+  // Step 1: compute totals and sort WITHOUT the search term to get stable ranks
+  const withTotals = EMPLOYEES.map((emp) => {
     const filtered = emp.activities.filter((act) => {
       if (yearVal && getYear(act.date) !== yearVal) return false;
       if (quarterVal && String(getQuarter(act.date)) !== quarterVal)
@@ -695,11 +696,13 @@ function applyFilters(yearVal, quarterVal, categoryVal, searchVal) {
       education,
     };
   })
-    .filter((emp) => {
-      if (search && !emp.name.toLowerCase().includes(search)) return false;
-      return emp.total > 0 || search; // hide 0-point entries unless searching
-    })
+    .filter((emp) => emp.total > 0)
     .sort((a, b) => b.total - a.total);
+
+  // Step 2: assign stable ranks, then apply search filter
+  return withTotals
+    .map((emp, idx) => ({ ...emp, originalRank: idx + 1 }))
+    .filter((emp) => !search || emp.name.toLowerCase().includes(search));
 }
 
 /* ─── SVG icons ──────────────────────────────────────────────────────────── */
@@ -714,23 +717,30 @@ const ICON_CHEVRON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 
 /* ─── Render podium ──────────────────────────────────────────────────────── */
 
-function renderPodium(ranked) {
+// ranked = full top-N list for positions; visibleIds = Set of ids to actually show (null = show all)
+function renderPodium(ranked, visibleIds) {
   const podiumEl = document.getElementById("podium");
   if (ranked.length === 0) {
     podiumEl.innerHTML = "";
     return;
   }
 
-  const order = [ranked[1], ranked[0], ranked[2]].filter(Boolean);
+  // slots: [rank-2 slot, rank-1 slot, rank-3 slot]
+  const slotEmps = [ranked[1], ranked[0], ranked[2]];
   const rankClass = ["rank-2", "rank-1", "rank-3"];
   const rankNum = [2, 1, 3];
 
-  podiumEl.innerHTML = order
+  podiumEl.innerHTML = slotEmps
     .map((emp, i) => {
       const rc = rankClass[i];
       const rn = rankNum[i];
-      const ini = getInitials(emp.name);
 
+      // Skip slots that are filtered out by search
+      if (!emp || (visibleIds && !visibleIds.has(emp.id))) {
+        return "";
+      }
+
+      const ini = getInitials(emp.name);
       return `
       <div class="podium-item ${rc}">
         <div class="podium-avatar-wrap">
@@ -762,7 +772,7 @@ function renderList(ranked) {
   listEl.innerHTML = ranked
     .map((emp, idx) => {
       const ini = getInitials(emp.name);
-      const rank = idx + 1;
+      const rank = emp.originalRank;
       const hasPr = emp.presentations > 0;
       const hasEd = emp.education > 0;
 
@@ -835,8 +845,18 @@ function render() {
   const category = document.getElementById("categoryFilter").value;
   const search = document.getElementById("searchInput").value;
 
+  const allRanked = applyFilters(year, quarter, category, "");
   const ranked = applyFilters(year, quarter, category, search);
-  renderPodium(ranked);
+
+  const isSearching = search.trim().length > 0;
+  if (isSearching) {
+    const visibleIds = new Set(ranked.map((e) => e.id));
+    const hasTopResult = ranked.some((e) => e.originalRank <= 3);
+    // Show podium with empty slots for unmatched top-3; hide entirely if no top-3 matched
+    renderPodium(hasTopResult ? allRanked : [], hasTopResult ? visibleIds : null);
+  } else {
+    renderPodium(allRanked, null);
+  }
   renderList(ranked);
 }
 
